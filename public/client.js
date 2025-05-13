@@ -250,7 +250,26 @@ function startPeerConnection() {
     console.log("Remote track received:", event.streams[0]);
     if (remoteVideo.srcObject !== event.streams[0]) {
       remoteVideo.srcObject = event.streams[0];
-      statusElement.textContent = "Status: Connected! Video streaming.";
+      statusElement.textContent =
+        "Status: Connected! Video streaming (attempting play)."; // ステータス変更
+
+      // ★★★ 再生を明示的に試みる ★★★
+      const playPromise = remoteVideo.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then((_) => {
+            // 自動再生が開始された
+            console.log("Video playback started successfully.");
+            statusElement.textContent = "Status: Connected! Video streaming.";
+          })
+          .catch((error) => {
+            // 自動再生が失敗した (ユーザー操作が必要な場合など)
+            console.error("Video playback failed:", error);
+            statusElement.textContent =
+              "Status: Connected! Click video to play (autoplay failed).";
+            // 必要であれば、ユーザーに再生を促すUIを表示する
+          });
+      }
     }
   };
 
