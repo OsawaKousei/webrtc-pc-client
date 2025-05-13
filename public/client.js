@@ -31,21 +31,55 @@ socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
 
     switch (data.type) {
-      case "android-available":
+      case "android-available": // ★ Android準備完了通知を受信
         statusElement.textContent =
-          "Status: Android client available. Ready to connect.";
+          "Status: Android client available. Initializing connection...";
+        // ★ PeerConnectionの準備を開始
+        startPeerConnection();
+        // PeerConnectionが準備できたことを示す（Offerを待機）
+        if (peerConnection) {
+          statusElement.textContent =
+            "Status: Ready. Waiting for offer from Android...";
+        } else {
+          statusElement.textContent = "Status: Error initializing WebRTC.";
+        }
+        // ボタンは有効にするが、Offer/Answer開始のトリガーではなくなる
         connectButton.disabled = false;
         break;
 
-      case "offer":
+      case "offer": // ★ Offerを受信
+        // PeerConnectionが準備できているか確認
+        if (!peerConnection) {
+          console.warn(
+            "Offer received, but PeerConnection is not ready. Attempting to initialize now."
+          );
+          startPeerConnection(); // 念のため初期化試行
+          if (!peerConnection) {
+            console.error(
+              "Failed to initialize PeerConnection before handling offer."
+            );
+            statusElement.textContent =
+              "Error: WebRTC connection not ready to receive offer.";
+            return; // Offerを処理できない
+          }
+        }
+        // ★ handleOffer を呼び出す (data.sdp は Offer SDP 文字列)
         handleOffer(data.sdp);
         break;
 
       case "answer":
-        handleAnswer(data.sdp);
+        // Android側がOfferを出すので、クライアントがAnswerを受信することはないはず
+        console.warn("Received unexpected Answer message.");
+        // handleAnswer(data.sdp); // 必要なら残す
         break;
 
       case "candidate":
+        // PeerConnectionが準備できていないとCandidateも処理できない
+        if (!peerConnection) {
+          console.warn("Candidate received, but PeerConnection is not ready.");
+          // ここで startPeerConnection を呼ぶのは手遅れの場合が多い
+          return;
+        }
         handleCandidate(data.candidate);
         break;
 
@@ -96,32 +130,51 @@ function sendMessage(message) {
 }
 
 // Offerを処理する
-async function handleOffer(offerSdp) {
+async function handleOffer(offerSdpString) {
+  // 引数はSDP文字列そのもの
+  // PeerConnectionがなければ開始 (二重チェック)
   if (!peerConnection) {
+    console.log(
+      "handleOffer called but PeerConnection not ready, starting now."
+    );
     startPeerConnection();
+    if (!peerConnection) {
+      console.error("Failed to initialize PeerConnection in handleOffer.");
+      return;
+    }
   }
 
-  console.log("Received Offer:", offerSdp);
+  console.log(
+    "Received Offer String:",
+    offerSdpString.substring(0, 100) + "..."
+  ); // 全部はログに出さない方が良い場合も
   statusElement.textContent = "Status: Offer received. Creating answer...";
 
   try {
+    // Offer SDPオブジェクトを作成
+    const offerDescription = { type: "offer", sdp: offerSdpString };
+    console.log("Setting remote description (Offer)...");
     await peerConnection.setRemoteDescription(
-      new RTCSessionDescription(offerSdp)
+      new RTCSessionDescription(offerDescription)
     );
+
+    console.log("Creating Answer...");
     const answer = await peerConnection.createAnswer();
+    console.log("Setting local description (Answer)...");
     await peerConnection.setLocalDescription(answer);
 
     console.log("Sending Answer:", answer);
+    // ★ AnswerをAndroid側の期待するフォーマットで送信
     sendMessage({
       type: "answer",
       sdp: { type: answer.type, sdp: answer.sdp },
     });
 
     statusElement.textContent =
-      "Status: Answer sent. Waiting for connection...";
+      "Status: Answer sent. Negotiating connection...";
   } catch (error) {
     console.error("Error handling offer:", error);
-    statusElement.textContent = "Error: " + error.message;
+    statusElement.textContent = "Error handling offer: " + error.message;
   }
 }
 
@@ -158,9 +211,12 @@ async function handleCandidate(candidate) {
 
 // 接続ボタンクリック処理
 connectButton.onclick = () => {
-  statusElement.textContent = "Status: Attempting to connect to Android...";
-  startPeerConnection();
-  connectButton.disabled = true;
+  console.log(
+    "Connect button clicked (currently does nothing for connection initiation)."
+  );
+  // statusElement.textContent = "Status: Attempting to connect to Android...";
+  // startPeerConnection();
+  // connectButton.disabled = true;
 };
 
 // WebRTC接続を開始
@@ -171,14 +227,20 @@ function startPeerConnection() {
 
   peerConnection.onicecandidate = (event) => {
     if (event.candidate) {
-      console.log("Sending ICE Candidate:", event.candidate);
+      // ログメッセージも修正すると分かりやすいです
+      console.log(
+        "Sending ICE Candidate (using sdpMLineIndex/sdpMid keys):",
+        event.candidate
+      );
       sendMessage({
         type: "candidate",
         candidate: {
-          type: "candidate",
-          label: event.candidate.sdpMLineIndex,
-          id: event.candidate.sdpMid,
-          candidate: event.candidate.candidate,
+          // 送信するオブジェクト
+          // ★★★ 修正点: キー名を "sdpMLineIndex" と "sdpMid" に修正 ★★★
+          sdpMLineIndex: event.candidate.sdpMLineIndex, // "label" ではなく "sdpMLineIndex"
+          sdpMid: event.candidate.sdpMid, // "id" ではなく "sdpMid"
+          candidate: event.candidate.candidate, // "candidate" はそのまま
+          // "type": "candidate" は通常このネストされたオブジェクト内には不要
         },
       });
     }
